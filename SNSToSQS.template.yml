@@ -1,0 +1,198 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "This template is deploying SNS, SQS and IAM User."
+Parameters:
+  "${AWS_PREFIX}UserPassword":
+    NoEcho: "true"
+    Type: String
+    Description: Password for the IAM user ${AWS_PREFIX}User
+    MinLength: "1"
+    MaxLength: "41"
+    AllowedPattern: "[a-zA-Z0-9]*"
+    ConstraintDescription: must contain only alphanumeric characters.
+Resources:
+  "${AWS_PREFIX}SNSTopic":
+    Type: AWS::SNS::Topic
+    Properties:
+      DisplayName: "${AWS_PREFIX}SNSTopic"
+      TopicName: "${AWS_PREFIX}SNSTopic"
+  "${AWS_PREFIX}SNSTopicSubscription1":
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref "${AWS_PREFIX}SNSTopic"
+      Endpoint:
+        Fn::GetAtt:
+          - "${AWS_PREFIX}Queue1"
+          - Arn
+      RawMessageDelivery: true
+      Protocol: sqs
+  "${AWS_PREFIX}SNSTopicSubscription2":
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref "${AWS_PREFIX}SNSTopic"
+      Endpoint:
+        Fn::GetAtt:
+          - "${AWS_PREFIX}Queue2"
+          - Arn
+      RawMessageDelivery: true
+      Protocol: sqs
+  "${AWS_PREFIX}DeadLetterQueue1":
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: "${AWS_PREFIX}DeadLetterQueue1"
+      VisibilityTimeout: 600
+  "${AWS_PREFIX}Queue1":
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: "${AWS_PREFIX}Queue1"
+      VisibilityTimeout: 600
+      RedrivePolicy:
+        deadLetterTargetArn:
+          Fn::GetAtt:
+            - "${AWS_PREFIX}DeadLetterQueue1"
+            - "Arn"
+        maxReceiveCount: 10
+  "${AWS_PREFIX}DeadLetterQueue2":
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: "${AWS_PREFIX}DeadLetterQueue2"
+      VisibilityTimeout: 600
+  "${AWS_PREFIX}Queue2":
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: "${AWS_PREFIX}Queue2"
+      VisibilityTimeout: 600
+      RedrivePolicy:
+        deadLetterTargetArn:
+          Fn::GetAtt:
+            - "${AWS_PREFIX}DeadLetterQueue2"
+            - "Arn"
+        maxReceiveCount: 10
+  "${AWS_PREFIX}User":
+    Type: AWS::IAM::User
+    Properties:
+      LoginProfile:
+        Password:
+          Ref: "${AWS_PREFIX}UserPassword"
+  "${AWS_PREFIX}UserKey":
+    Type: AWS::IAM::AccessKey
+    Properties:
+      UserName:
+        Ref: "${AWS_PREFIX}User"
+  "${AWS_PREFIX}PublishTopicGroup":
+    Type: AWS::IAM::Group
+    Properties:
+      Policies:
+        - PolicyName: "${AWS_PREFIX}TopicGroupPolicy"
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - sns:Publish
+                Resource:
+                  Ref: "${AWS_PREFIX}SNSTopic"
+  "AddUserTo${AWS_PREFIX}PublishTopicGroup":
+    Type: AWS::IAM::UserToGroupAddition
+    Properties:
+      GroupName:
+        Ref: "${AWS_PREFIX}PublishTopicGroup"
+      Users:
+        - Ref: "${AWS_PREFIX}User"
+  "${AWS_PREFIX}RDMessageQueueGroup":
+    Type: AWS::IAM::Group
+    Properties:
+      Policies:
+        - PolicyName: "${AWS_PREFIX}QueueGroupPolicy"
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - sqs:DeleteMessage
+                  - sqs:ReceiveMessage
+                  - sqs:ChangeMessageVisibility
+                  - sqs:GetQueueAttributes
+                  - sqs:GetQueueUrl
+                  - sqs:ListQueues
+                  - sqs:SendMessage
+                  - sqs:SetQueueAttributes
+                Resource:
+                  - Fn::GetAtt:
+                      - "${AWS_PREFIX}DeadLetterQueue1"
+                      - Arn
+                  - Fn::GetAtt:
+                      - "${AWS_PREFIX}DeadLetterQueue2"
+                      - Arn
+                  - Fn::GetAtt:
+                      - "${AWS_PREFIX}Queue1"
+                      - Arn
+                  - Fn::GetAtt:
+                      - "${AWS_PREFIX}Queue2"
+                      - Arn
+  "AddUserTo${AWS_PREFIX}QueueGroup":
+    Type: AWS::IAM::UserToGroupAddition
+    Properties:
+      GroupName:
+        Ref: "${AWS_PREFIX}RDMessageQueueGroup"
+      Users:
+        - Ref: "${AWS_PREFIX}User"
+  "${AWS_PREFIX}QueuePolicy":
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      PolicyDocument:
+        Id: "${AWS_PREFIX}QueuePolicy"
+        Statement:
+          - Sid: Allow-SendMessage-To-Both-Queues-From-SNS-Topic
+            Effect: Allow
+            Principal:
+              AWS: "*"
+            Action:
+              - sqs:SendMessage
+            Resource: "*"
+            Condition:
+              ArnEquals:
+                aws:SourceArn:
+                  Ref: "${AWS_PREFIX}SNSTopic"
+      Queues:
+        - Ref: "${AWS_PREFIX}Queue1"
+        - Ref: "${AWS_PREFIX}Queue2"
+Outputs:
+  "${AWS_PREFIX}SNSTopicTopicARN":
+    Value:
+      Ref: "${AWS_PREFIX}SNSTopic"
+    Description: Topic ARN of newly created SNS topic
+  "${AWS_PREFIX}Queue1Info":
+    Value:
+      Fn::Join:
+        - " "
+        - - "ARN:"
+          - Fn::GetAtt:
+              - "${AWS_PREFIX}Queue1"
+              - Arn
+          - "URL:"
+          - Ref: "${AWS_PREFIX}Queue1"
+    Description: Queue1 details
+  "${AWS_PREFIX}Queue2Info":
+    Value:
+      Fn::Join:
+        - " "
+        - - "ARN:"
+          - Fn::GetAtt:
+              - "${AWS_PREFIX}Queue2"
+              - Arn
+          - "URL:"
+          - Ref: "${AWS_PREFIX}Queue2"
+    Description: Queue2 details
+  "${AWS_PREFIX}UserInfo":
+    Description: Information for publisher
+    Value:
+      Fn::Join:
+        - " "
+        - - "ARN:"
+          - Fn::GetAtt:
+              - "${AWS_PREFIX}User"
+              - Arn
+          - "Access Key:"
+          - Ref: "${AWS_PREFIX}UserKey"
+          - "Secret Key:"
+          - Fn::GetAtt:
+              - "${AWS_PREFIX}UserKey"
+              - SecretAccessKey
